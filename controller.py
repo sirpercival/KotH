@@ -69,7 +69,7 @@ ADDENEMY = {'.':'e', '&':'E', '@':'@'}
 COLOR = {'.': [0.95, 0.95, 0.95],
          '&': [0.2, 0.2, 0.2],
          'b': [0., 1., 0.],
-         'B': [0.2, 0.6, 0.2],
+         'B': [0.2, 0.6, 0.6],
          '@': [1., 0., 0.],
          '#': [0., 0., 0.]}
 
@@ -165,17 +165,18 @@ class Bot(object):
         or if distance > elevation, use elevation. distance=0
         destroys the rock/enemy below you (if any).'''
         direction = direction.lower()
-        if distance is None or distance >= self.elevation:
-            distance = self.elevation - 1 #we move out 1 space before falling
         x, y = self.coords
         if distance == 0 or direction == 'down':
             board.collide(x, y-1)
             return
+        if distance is None or distance >= self.elevation:
+        #we move out 1 space before falling
+            distance = max([self.elevation - 1,0])
         if direction == 'up': #uh oh
             if not board.collide(x, y+1):
                 board.collide(x,y)
             return
-        dy = float(self.elevation) / float(distance)
+        dy = float(self.elevation) / float(distance) if distance > 0 else 0
         dx = self.dirs[direction][0]
         x = x + dx
         while not board.collide(x, y):
@@ -305,8 +306,10 @@ class Board(object):
             return True
         else: #we're gonna destroy one or more things
             self.crush(x, y)
+            occupied = lambda x, y: self._board[y, x] in ('&', '@') or \
+                                    self.find_bot(x, y) is not None
             y0 = y
-            while self._board[y0 + 1, x] == '&':
+            while occupied(x, y0 + 1):
                 self.crush(x, y0)
                 y0 += 1
             self._board[x, y0] = '.'
@@ -469,7 +472,9 @@ class Controller(object):
         anim = animation.FuncAnimation(fig, animate, init_func=init,
                                        frames=len(history), interval=20,
                                        blit=True)
-        anim.save(filename+'.gif', writer='imagemagick', fps=10)
+        #anim.save(filename+'.gif', writer='imagemagick', fps=10)
+        anim.save('replays/' + filename + '.webm', writer='ffmpeg',
+                  fps=30, extra_args=['-vcodec', 'libvpx'])
 
 if __name__ == "__main__":
     import argparse

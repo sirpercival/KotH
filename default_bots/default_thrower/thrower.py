@@ -45,7 +45,6 @@ class Bot(object):
             with open(self.storage, 'r') as f:
                 history = json.load(f)
         except ValueError:
-            print 'oops'
             history = []
         history.append(self.__dict__)
         with open(self.storage, 'w') as f:
