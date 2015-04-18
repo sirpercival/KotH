@@ -226,8 +226,10 @@ class Bot(object):
 class Meteor(object):
     def __init__(self):
         from itertools import count
-        self._xpar = count(random.randrange(100), random.uniform(-2,2))
-        self._ypar = count(99, random.uniform(-0.1,-2))
+        from math import sin, cos, radians
+        r, theta = 2, radians(random.randrange(-180,0))
+        self._xpar = count(random.randrange(100), r * cos(theta))
+        self._ypar = count(99, r * sin(theta))
         self.x = self.y = None
         self.destroy = False
     
