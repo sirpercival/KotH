@@ -1,0 +1,3 @@
+python -c "open('storage.txt','w').close()"
+python -c "open('log.txt','w').close()"
+python thrower.py
