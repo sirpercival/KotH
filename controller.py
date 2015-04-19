@@ -75,6 +75,10 @@ COLOR = {'.': [0.95, 0.95, 0.95],
 
 
 class Communicator(object):
+    '''a class for handling language-agnostic bot interface, via
+    subprocess. commands are handled via a commands.txt file in
+    the bot's directory, one command per line, with the last command
+    handling the actual interface (everything before it is pre-run).'''
     def __init__(self, bot_name, command, no_print, botdir = "bots/"):
         self.name = bot_name
         self.no_print = no_print
@@ -83,6 +87,7 @@ class Communicator(object):
         self.cwd = botdir+self.name+"/"
     
     def __call__(self, message):
+        '''pass the input to the bot, and send back the response.'''
         args = self.commands[:]
         if message is not None:
             args.append(message)
@@ -96,17 +101,21 @@ class Communicator(object):
     
     @staticmethod
     def read_bot_list(botdir = 'bots/'):
+        '''get a list of all bots in the directory for 
+        which we have commands'''
         return [n for n in os.listdir(botdir)
                 if os.path.isfile(botdir+n+"/command.txt")]
 
 class Bot(object):
+    '''the controller-side implementation for a bot (with the bot-side
+    implementation contributed by whatever author)'''
     dirs = {'up': (0 , 1),
             'down': (0, -1),
             'left': (-1, 0),
             'right': (1, 0)}
 
     def __init__(self, logic=None, x=0):
-        '''logic is an object containing a Communicator?'''
+        '''logic is a Communicator'''
         self.logic = logic
         self.location = x
         self.elevation = 0
@@ -128,9 +137,11 @@ class Bot(object):
 
     @property
     def dead(self):
+        '''am i dead? i might be.'''
         return self._dead
 
     def kill(self):
+        '''suicide, or murder, whatever.'''
         self._dead = True
 
     def _shift(self, dx, dy):
@@ -204,6 +215,8 @@ class Bot(object):
             board.place_rock(x_rock, y_rock)
 
     def __call__(self, board):
+        '''send the input to the bot code via the Communicator,
+        and parse the output for syntactic validity.'''
         view = board.view(*self.coords)
         output = self.logic(view)
         #time to parse the donuts
@@ -225,6 +238,8 @@ class Bot(object):
         return action, direction, distance
 
 class Meteor(object):
+    '''a quick & dirty meteor, which falls from a random point at
+    the top of the board at a speed of 2/step, at a random angle.'''
     def __init__(self):
         from itertools import count
         from math import sin, cos, radians
@@ -239,6 +254,7 @@ class Meteor(object):
         return int(self.x), int(self.y)
     
     def step(self):
+        '''we're using count()s as our parametric equations'''
         self.x = next(self._xpar)
         self.y = next(self._ypar)
 
@@ -261,19 +277,21 @@ class Board(object):
 
     @property
     def bot_pos(self):
+        '''a list of bot positions'''
         return [bot.coords for bot in self._bots]
     
     @property
     def nbot(self):
+        '''how many bots are left?'''
         return len(self._bots)
 
-    def __getitem__(self, x, y):
-        return self._board[y, x]
-
     def __call__(self, x, y):
+        '''this gets the description of the thing, not the character,
+        which is accessible from self._board'''
         return LOOKUP[self._board[y, x]]
 
     def __repr__(self):
+        '''generate a bot-neutral string representation of the board'''
         board = self._board.copy()
         nrow, ncol = board.shape
         for x, y in self.bot_pos:
@@ -287,16 +305,23 @@ class Board(object):
         return '\n'.join(rows)
 
     def find_bot(self, x, y):
+        '''locate a bot or return None if it ain't there.'''
         for bot in self._bots:
             if bot.location == x and bot.elevation == y:
                 return bot
         return None
     
     def boundary(self, x, y):
+        '''are we off the edge of the board?'''
         return x < 0 or x > 99 or y < 0 or y > 99
         #return self._board[y, x] == '#'
 
     def collide(self, x, y):
+        '''see if the projectile at this location hits anything.
+        if it hits something other than the border, like a rock
+        or a bot, the target is destroyed; any rocks or bots supported
+        by the destroyed target fall 1 square (we hope, this part isn't
+        working yet...)'''
         if any([_ < 0 or _ > 99 for _ in [x, y]]):
             return True
         has = self(x, y)
@@ -322,11 +347,13 @@ class Board(object):
             return True
 
     def crush(self, x, y):
+        '''kill a bot in this square, if any'''
         bot = self.find_bot(x, y)
         if bot is not None:
             bot.kill()
 
     def fall_distance(self, x, y):
+        '''how far do we have to fall to get to a supported space?'''
         fall = 0
         y0 = lambda t: y - t - 1
         test = lambda s: s not in ('#', '&') and s >= 0 and s <= 99
@@ -335,6 +362,7 @@ class Board(object):
         return fall
 
     def place_rock(self, x, y):
+        '''put a rock here.'''
         self._board[y, x] = '&'            
 
     def view(self, x0, y0):
@@ -396,6 +424,7 @@ class Board(object):
             self.done = len(self._bots) == 0
         
     def save_snapshot(self):
+        '''save a snapshot of the game board, for replays later'''
         nrow, ncol = self._board.shape
         record = {'bots': [tuple(_) for _ in self.bot_pos], 
                   'rocks': [(loc, ele) for ele in xrange(nrow) 
@@ -405,6 +434,7 @@ class Board(object):
         self.history.append(record)
 
 class Controller(object):
+    '''this loads the bots and runs the games.'''
     def __init__(self, botdir):
         self.bot_names = Communicator.read_bot_list(botdir)
         self.bots = []
@@ -425,6 +455,7 @@ class Controller(object):
         self.scores = {b:[] for b in self.bot_names}
 
     def run(self, ngame=1):
+        '''run some number of games.'''
         self.games = [Board(self.bots) for _ in xrange(ngame)]
         for game in self.games:
             if debug: print 'Running the next game!'
@@ -437,6 +468,8 @@ class Controller(object):
                     self.scores[bot.logic.name].append(turn)
 
     def leaderboard(self):
+        '''accumulate all the bots' scores across all games
+        and return an ok-formatted leaderboard'''
         score_accum = {bot: sum(score) for bot, score in self.scores.items()}
         rows = []
         for bot in sorted(score_accum, reverse=True, 
@@ -447,6 +480,8 @@ class Controller(object):
         return '\n'.join(rows)
     
     def save_replay(self, gid, filename='Abotalypse_Replay'):
+        '''use a matplotlib animation (output to webm) to show
+        a replay of a game's history.'''
         if replay < 1:
             return
         history = self.games[gid].history
