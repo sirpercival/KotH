@@ -1,2 +1,0 @@
-rm storage.txt
-python thrower.py
