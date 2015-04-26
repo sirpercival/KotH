@@ -84,7 +84,7 @@ class Communicator(object):
         self.no_print = no_print
         self.commands = shlex.split(command)
         self.response = None
-        self.cwd = botdir+self.name+"/"
+        self.cwd = os.path.join(botdir, self.name)
     
     def __call__(self, message):
         '''pass the input to the bot, and send back the response.'''
@@ -93,8 +93,9 @@ class Communicator(object):
             args.append(message)
             if debug and not self.no_print:
                 print "sent view to " + self.name + " :\n" + message
-        self.response = subprocess.check_output(args=args, cwd=self.cwd,
-                                                stderr=subprocess.PIPE).strip()
+        with open(os.path.join(self.cwd,'errlog.txt'),'a') as f:
+            self.response = subprocess.check_output(args=args, cwd=self.cwd,
+                                                stderr=f).strip()
         if debug and not self.no_print:
             print "got response from "+self.name+" : "+self.response
         return self.response
@@ -104,7 +105,7 @@ class Communicator(object):
         '''get a list of all bots in the directory for 
         which we have commands'''
         return [n for n in os.listdir(botdir)
-                if os.path.isfile(botdir+n+"/command.txt")]
+                if os.path.isfile(os.path.join(botdir, n, "command.txt"))]
 
 class Bot(object):
     '''the controller-side implementation for a bot (with the bot-side
@@ -117,6 +118,7 @@ class Bot(object):
     def __init__(self, logic=None, x=0):
         '''logic is a Communicator'''
         self.logic = logic
+        self.name = logic.name
         self.location = x
         self.elevation = 0
         self._dead = False
@@ -187,11 +189,16 @@ class Bot(object):
             if not board.collide(x, y+1):
                 board.collide(x,y)
             return
-        dy = float(self.elevation) / float(distance) if distance > 0 else 0
+        dy = float(self.elevation) / float(distance) if distance > 0 else 1
         dx = self.dirs[direction][0]
         x = x + dx
+        b = board.find_bot(x, y)
+        #if b != None:
+        #    pdb.set_trace()
         while not board.collide(x, y):
             x, y = x + dx, int(y - dy)
+        if b != None and not b.dead:
+            pdb.set_trace()
 
     def drop(self, board, direction='down', *arg):
         '''drop a rock. dropping 'down' puts the rock in your space
@@ -288,6 +295,8 @@ class Board(object):
     def __call__(self, x, y):
         '''this gets the description of the thing, not the character,
         which is accessible from self._board'''
+        if self.find_bot(x, y) != None:
+            return LOOKUP[ADDBOT[self._board[y,x]]]
         return LOOKUP[self._board[y, x]]
 
     def __repr__(self):
@@ -295,11 +304,12 @@ class Board(object):
         board = self._board.copy()
         nrow, ncol = board.shape
         for x, y in self.bot_pos:
-            board[y, x] = ADDBOT[board[y,x]]
+            if not self.find_bot(x, y).dead:
+                board[y, x] = ADDBOT[board[y, x]]
         for m in self._meteors:
             x, y = m.coords
             board[y, x] = LEGEND['meteor']
-        rows = ['#%s#' % ''.join(self._board[row].tolist()) for row in 
+        rows = ['#%s#' % ''.join(board[row].tolist()) for row in 
                 reversed(xrange(nrow))]
         rows = ['#' * (ncol + 2)] + rows + ['#' * (ncol + 2)]
         return '\n'.join(rows)
@@ -307,7 +317,7 @@ class Board(object):
     def find_bot(self, x, y):
         '''locate a bot or return None if it ain't there.'''
         for bot in self._bots:
-            if bot.location == x and bot.elevation == y:
+            if bot.location == x and bot.elevation == y and not bot.dead:
                 return bot
         return None
     
@@ -331,19 +341,22 @@ class Board(object):
             return True
         else: #we're gonna destroy one or more things
             self.crush(x, y)
-            occupied = lambda x, y: self._board[y, x] in ('&', '@') or \
-                                    self.find_bot(x, y) is not None
-            y0 = y
-            while occupied(x, y0 + 1):
-                self.crush(x, y0)
-                y0 += 1
-            self._board[x, y0] = '.'
-            bot = self.find_bot(x, y0)
-            if bot is not None:
-                bot._fall(1)
-            bot = self.find_bot(x, y0 + 1)
-            if bot is not None:
-                bot._fall(1)
+            column = [(ele, self(x, ele)) for ele in range(100)] #grab the whole column
+            rocks = [ele for ele, _ in column if 'rock' in _]
+            bots = [ele for loc, ele in self.bot_pos if loc == x]
+            nrock = max([len(rocks) - 1,0]) #we just destroyed one, maybe
+            toprock = max(rocks) if len(rocks) > 0 else 0
+            self._board[:,x] = '.'
+            self._board[:nrock, x] = '&'
+            for bot in bots:
+                if bot < y:
+                    continue
+                if bot < toprock:
+                    self.crush(x, bot)
+                else:
+                    b = self.find_bot(x, bot)
+                    if b is not None:
+                        b._fall(1)
             return True
 
     def crush(self, x, y):
@@ -356,7 +369,7 @@ class Board(object):
         '''how far do we have to fall to get to a supported space?'''
         fall = 0
         y0 = lambda t: y - t - 1
-        test = lambda s: s not in ('#', '&') and s >= 0 and s <= 99
+        test = lambda s: s not in ('bound', 'rock') and s >= 0 and s <= 99
         while test(self(x, y0(fall))):
             fall += 1
         return fall
@@ -364,12 +377,18 @@ class Board(object):
     def place_rock(self, x, y):
         '''put a rock here.'''
         self._board[y, x] = '&'            
+    
+    @staticmethod
+    def build_string(b):
+        nrow, ncol = b.shape
+        return '\n'.join([''.join(b[row].tolist()) 
+                            for row in reversed(xrange(nrow))])
 
     def view(self, x0, y0):
         '''put together a view string to pass to a bot.
         max view distance is 20 squares in any direction (chebyshev).
         we must account for the border as well.'''
-        lx, hx, ly, hy = np.clip([x0 - 19, x0 + 21, y0 - 19, y0 + 21], 0, 99)
+        lx, hx, ly, hy = np.clip([x0 - 19, x0 + 21, y0 - 19, y0 + 21], 0, 101)
         board = np.full((102, 102),'#',dtype='string_')
         board[1:101, 1:101] = self._board
         for x, y in self.bot_pos:
@@ -379,10 +398,8 @@ class Board(object):
         for m in self._meteors:
             x, y = m.coords
             board[y + 1, x + 1] = LEGEND['meteor']
-        board = board[ly:hy + 1, lx:hx + 1]
-        nrow, ncol = board.shape
-        return '\n'.join([''.join(board[row].tolist()) for row in 
-                          reversed(xrange(nrow))])
+        b = board[ly:hy + 1, lx:hx + 1]
+        return self.build_string(b)
     
     def step(self):
         '''priority: rests -> moves -> drops -> throws -> meteors
@@ -403,8 +420,8 @@ class Board(object):
             b = coords.pop()
             for i, c in enumerate(coords):
                 if b[1] == c[1]:
-                    b.kill()
-                    c.kill()
+                    b[0].kill()
+                    c[0].kill()
                     del coords[i]
         #meteors time!
         self._meteors.append(Meteor())
@@ -436,22 +453,30 @@ class Board(object):
 class Controller(object):
     '''this loads the bots and runs the games.'''
     def __init__(self, botdir):
+        self.botdir = botdir
         self.bot_names = Communicator.read_bot_list(botdir)
         self.bots = []
+        self.load_bots()
+        
+    def load_bots(self):
+        bd = self.botdir
         for d in self.bot_names:
-            with open(botdir+d+"/command.txt", 'r') as f:
+            with open(os.path.join(bd, d, "command.txt"), 'r') as f:
                 commands = f.read().splitlines()
             if commands:
                 for command in commands[0:-1]:
-                    subprocess.call(command.split(" "), cwd=botdir+d+"/")
+                    subprocess.call(command.split(" "), 
+                                    cwd=os.path.join(bd, d))
                 if WINDOWS:
-                    commands[-1] = commands[-1].replace("./", botdir+d+"/")
+                    commands[-1] = commands[-1].replace("./", 
+                                                        os.path.join(bd, d)
+                                                        + "/")
                 #no_print = os.path.isfile(botdir+d+"/noprint")
                 no_print = True
                 self.bots.append(Communicator(bot_name=d, 
                                               command=commands[-1],
                                               no_print=no_print,
-                                              botdir = botdir))
+                                              botdir = bd))
         self.scores = {b:[] for b in self.bot_names}
 
     def run(self, ngame=1):
@@ -465,7 +490,7 @@ class Controller(object):
                 #                ', '.join([b.logic.name for b in game._bots]))
             for turn, dead in game.deathturn:
                 for bot in dead:
-                    self.scores[bot.logic.name].append(turn)
+                    self.scores[bot.name].append(turn)
 
     def leaderboard(self):
         '''accumulate all the bots' scores across all games
@@ -507,7 +532,6 @@ class Controller(object):
         anim = animation.FuncAnimation(fig, animate, init_func=init,
                                        frames=len(history), interval=20,
                                        blit=True)
-        #anim.save(filename+'.gif', writer='imagemagick', fps=10)
         anim.save('replays/' + filename + '.webm', writer='ffmpeg',
                   fps=30, extra_args=['-vcodec', 'libvpx'])
 
@@ -519,12 +543,31 @@ if __name__ == "__main__":
     parser.add_argument('--default', action='store_true')
     parser.add_argument('-r', '--replay', action='store_true')
     parser.add_argument('botdir', nargs='?', default='bots/')
+    parser.add_argument('--ndefault', type=int, default=2)
     
     args = parser.parse_args()
     botdir = 'default_bots/' if args.default else args.botdir
     ng = args.ngame
-    print 'Playing {:d} games, with bots from the folder: {}'.format(ng, 
-                                                                     botdir)
+    print 'Playing {:d} games, with bots from the folder: {}'.format(ng,botdir)
+    if args.default:
+        import tempfile, shutil
+        available = [x for x in os.listdir(botdir) 
+                     if os.path.isdir(os.path.join(botdir, x))]
+        bot_names = [random.choice(available) 
+                     for _ in xrange(args.ndefault)]
+        defdir = tempfile.mkdtemp(dir='.')
+        for i,b in enumerate(bot_names):
+            src = os.path.join(botdir, b)
+            dst = os.path.join(defdir, str(i) + '_' + b)
+            os.mkdir(dst)
+            for item in os.listdir(src):
+                s = os.path.join(src, item)
+                d = os.path.join(dst, item)
+                if os.path.isdir(s):
+                    shutil.copytree(s, d)
+                else:
+                    shutil.copy2(s, d)
+        botdir = defdir
     game = Controller(botdir = botdir)
     print 'Game created!'
     game.run(ng)
@@ -535,4 +578,6 @@ if __name__ == "__main__":
             game.save_replay(i, 
                              filename='Abotcalypse_Replay_' + str(i + 1)
                                       + '_of_' + str(ng))
-    
+    if args.default:
+        pass
+        #shutil.rmtree(botdir)
